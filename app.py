@@ -21,6 +21,16 @@ LTR_VIEW_COLUMN_NAMES = {
     "מספר סידורי",
 }
 
+# Columns we want to keep visible next to Age in the RTL view (view-only ordering)
+KEY_VIEW_ORDER = [
+    "גיל",
+    "תאריך לידה",
+    "ת.ז",
+    "שם משפחה",
+    "שם חניך",
+    "מספר סידורי",
+]
+
 
 SCOPES = [
     # Drive scope isn't required if you only use a known spreadsheetId,
@@ -329,6 +339,13 @@ html, body, [data-testid="stAppViewContainer"] {
   direction: rtl;
   text-align: right;
 }
+/* Force table cells to align right (Streamlit grids can override) */
+[data-testid="stDataFrame"] div[role="gridcell"] {
+  text-align: right !important;
+}
+[data-testid="stDataFrame"] div[role="gridcell"] input {
+  text-align: right !important;
+}
 /* Keep code blocks readable */
 code, pre, textarea {
   direction: ltr !important;
@@ -377,7 +394,24 @@ st.caption("Add new people by using the table’s built-in “add row”. Missin
 filter_text = st.text_input("חיפוש מהיר (בכל העמודות)", value="")
 base_df = df
 base_cols = list(base_df.columns)
-view_cols = list(reversed(base_cols))  # RTL-friendly: show right-to-left (reverse order)
+rtl_cols = list(reversed(base_cols))  # RTL-friendly base order (reverse)
+
+# Make important columns (around "גיל") easy to find without horizontal scrolling.
+if "גיל" in rtl_cols:
+    age_idx = rtl_cols.index("גיל")
+    view_cols = rtl_cols[age_idx:] + rtl_cols[:age_idx]
+else:
+    view_cols = rtl_cols
+
+# Ensure the key columns are placed first in the view (view-only; does NOT affect sheet).
+ordered_cols: list[str] = []
+for c in KEY_VIEW_ORDER:
+    if c in view_cols and c not in ordered_cols:
+        ordered_cols.append(c)
+for c in view_cols:
+    if c not in ordered_cols:
+        ordered_cols.append(c)
+view_cols = ordered_cols
 
 display_df = base_df[view_cols]
 if filter_text.strip():
@@ -405,7 +439,7 @@ edited_df = st.data_editor(
     },
 )
 
-# Extra CSS: force the numeric/date columns to look LTR + left aligned in the grid.
+# Extra CSS: force numeric/date columns to render LTR (but keep right alignment).
 ltr_view_cols_present = [c for c in view_cols if str(c).strip() in LTR_VIEW_COLUMN_NAMES]
 ltr_view_col_indices_1_based = [view_cols.index(c) + 1 for c in ltr_view_cols_present]
 if ltr_view_col_indices_1_based:
@@ -416,12 +450,12 @@ if ltr_view_col_indices_1_based:
 /* Column {idx} */
 [data-testid="stDataFrame"] div[role="row"] > div[role="gridcell"]:nth-child({idx}) {{
   direction: ltr !important;
-  text-align: left !important;
+  text-align: right !important;
   unicode-bidi: plaintext !important;
 }}
 [data-testid="stDataFrame"] div[role="row"] > div[role="gridcell"]:nth-child({idx}) input {{
   direction: ltr !important;
-  text-align: left !important;
+  text-align: right !important;
   unicode-bidi: plaintext !important;
 }}
 """
