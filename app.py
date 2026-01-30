@@ -8,6 +8,7 @@ from googleapiclient.discovery import build
 
 
 DEFAULT_SPREADSHEET_ID = "19261I9RJbS0Cnar6Ex0nnWa_gZqb3lGdM7L-gfv_gWs"
+DEFAULT_ID_COLUMN_NAME = "מספר סידורי"
 
 
 SCOPES = [
@@ -144,6 +145,79 @@ def list_worksheet_titles(meta: dict) -> list[str]:
     return [s["properties"]["title"] for s in meta.get("sheets", [])]
 
 
+def guess_id_column_name(columns: list[str]) -> str | None:
+    """
+    Best-effort guess for an "ID" column, including common Hebrew variants.
+    """
+    cols = [str(c) for c in columns]
+    lower = [c.strip().lower() for c in cols]
+
+    # Exact matches first
+    exact = {"id", "מזהה", "מספר מזהה"}
+    for i, c in enumerate(lower):
+        if c in exact:
+            return cols[i]
+
+    # Hebrew "ת״ז" variants (national ID) + generic ID-ish names
+    keywords = [
+        "ת\"ז",
+        "ת״ז",
+        "ת.ז",
+        "תז",
+        "תעודת זהות",
+        "מספר זהות",
+        "מספר תעודת זהות",
+        "id",
+        "מזהה",
+    ]
+    for i, orig in enumerate(cols):
+        s = orig.strip()
+        sl = s.lower()
+        if any(k.lower() in sl for k in keywords):
+            return orig
+
+    return None
+
+
+def _looks_int(s: str) -> bool:
+    s2 = s.strip()
+    if not s2:
+        return False
+    try:
+        int(s2)
+        return True
+    except Exception:
+        return False
+
+
+def autofill_missing_ids_by_appearance(df: pd.DataFrame, id_col: str) -> pd.DataFrame:
+    """
+    Fills blank IDs top-to-bottom (order of appearance), without changing existing IDs.
+    If existing IDs contain integers, new IDs continue from max+1; otherwise start at 1.
+    """
+    if id_col not in df.columns:
+        return df
+
+    out = df.copy()
+    series = out[id_col].astype(str)
+    blank_mask = series.str.strip().eq("") | series.str.strip().str.lower().eq("nan")
+
+    existing_ints: list[int] = []
+    for v in series[~blank_mask].tolist():
+        if _looks_int(v):
+            existing_ints.append(int(v.strip()))
+
+    next_id = (max(existing_ints) + 1) if existing_ints else 1
+
+    for idx in out.index.tolist():
+        v = str(out.at[idx, id_col])
+        if v.strip() == "" or v.strip().lower() == "nan":
+            out.at[idx, id_col] = str(next_id)
+            next_id += 1
+
+    return out
+
+
 def sanitize_df_for_sheet(df: pd.DataFrame) -> pd.DataFrame:
     df2 = df.copy()
     df2.columns = [str(c).strip() for c in df2.columns]
@@ -162,6 +236,12 @@ def overwrite_sheet_from_a1(creds: Credentials, spreadsheet_id: str, worksheet_n
     sheets = build("sheets", "v4", credentials=creds, cache_discovery=False)
 
     df2 = sanitize_df_for_sheet(df)
+
+    # Auto-fill missing IDs (if we can find an ID column)
+    forced_id_col = st.secrets.get("id_column_name", DEFAULT_ID_COLUMN_NAME) if hasattr(st, "secrets") else DEFAULT_ID_COLUMN_NAME
+    id_col = forced_id_col or guess_id_column_name(list(df2.columns))
+    if id_col:
+        df2 = autofill_missing_ids_by_appearance(df2, id_col)
     values = [list(df2.columns)] + df2.values.tolist()
 
     # Clear a big block to remove old leftovers (values only; formatting stays).
@@ -184,9 +264,35 @@ st.set_page_config(page_title="Google Sheet editor", layout="wide")
 st.title("CRM table (Google Sheets)")
 st.caption("View, edit, and add people rows in your main CRM spreadsheet.")
 
+st.markdown(
+    """
+<style>
+/* Make the app feel RTL for Hebrew */
+html, body, [data-testid="stAppViewContainer"] {
+  direction: rtl;
+}
+[data-testid="stAppViewContainer"] * {
+  direction: rtl;
+  text-align: right;
+}
+/* Keep code blocks readable */
+code, pre, textarea {
+  direction: ltr !important;
+  text-align: left !important;
+}
+/* Sidebar RTL */
+[data-testid="stSidebar"] {
+  direction: rtl;
+}
+</style>
+""",
+    unsafe_allow_html=True,
+)
+
 with st.sidebar:
     st.subheader("Spreadsheet")
-    spreadsheet_id = st.text_input("Spreadsheet ID", value=DEFAULT_SPREADSHEET_ID)
+    # Hide the spreadsheet ID from the UI; keep it configurable via secrets if needed.
+    spreadsheet_id = st.secrets.get("spreadsheet_id", DEFAULT_SPREADSHEET_ID)
     refresh = st.button("Refresh data")
 
 try:
@@ -207,74 +313,50 @@ with st.sidebar:
 
 df = read_sheet_as_df(creds, spreadsheet_id, worksheet_name=worksheet_title)
 
-top_left, top_right = st.columns([3, 2], gap="large")
+st.subheader("Saved data (edit directly in the table)")
+if df.empty:
+    st.info("Sheet looks empty. Add headers in row 1 in Google Sheets, then refresh.")
+    st.stop()
 
-with top_left:
-    st.subheader("Saved data")
-    if df.empty:
-        st.info("Sheet looks empty. Add headers in row 1 in Google Sheets, then refresh.")
-        st.stop()
+st.caption("Add new people by using the table’s built-in “add row”. Missing IDs will be auto-filled on save.")
 
-    filter_text = st.text_input("Quick filter (search across all columns)", value="")
-    display_df = df
-    if filter_text.strip():
-        needle = filter_text.strip().lower()
-        mask = df.astype(str).apply(lambda row: row.str.lower().str.contains(needle, na=False)).any(axis=1)
-        display_df = df[mask]
+filter_text = st.text_input("חיפוש מהיר (בכל העמודות)", value="")
+base_df = df
+base_cols = list(base_df.columns)
+view_cols = list(reversed(base_cols))  # RTL-friendly: show right-to-left (reverse order)
 
-    st.caption("Tip: you can edit cells directly in the grid below, add rows, then click Save edits.")
-    edited_df = st.data_editor(
-        display_df,
-        use_container_width=True,
-        hide_index=True,
-        num_rows="dynamic",
-    )
+display_df = base_df[view_cols]
+if filter_text.strip():
+    needle = filter_text.strip().lower()
+    mask = base_df.astype(str).apply(lambda row: row.str.lower().str.contains(needle, na=False)).any(axis=1)
+    display_df = base_df.loc[mask, view_cols]
 
-    c1, c2, c3 = st.columns([1, 1, 2])
-    with c1:
-        st.metric("Rows", len(df))
-    with c2:
-        st.metric("Columns", len(df.columns))
-    with c3:
-        csv = df.to_csv(index=False).encode("utf-8-sig")
-        st.download_button("Download CSV", data=csv, file_name="crm_export.csv", mime="text/csv")
+edited_df = st.data_editor(
+    display_df,
+    use_container_width=True,
+    hide_index=True,
+    num_rows="dynamic",
+)
 
-    if st.button("Save edits to Google Sheets", type="primary"):
+c1, c2, c3, c4 = st.columns([1, 1, 2, 2])
+with c1:
+    st.metric("שורות", len(df))
+with c2:
+    st.metric("עמודות", len(df.columns))
+with c3:
+    csv = df.to_csv(index=False).encode("utf-8-sig")
+    st.download_button("הורדת CSV", data=csv, file_name="crm_export.csv", mime="text/csv")
+with c4:
+    if st.button("שמירת שינויים ל‑Google Sheets", type="primary"):
         try:
-            # If user filtered, we must avoid accidentally saving only filtered subset.
-            # So: if a filter is active, block saving (to avoid data loss).
             if filter_text.strip():
-                st.error("Clear the filter before saving edits (to avoid overwriting with a subset).")
+                st.error("כדי לשמור שינויים, קודם לנקות את החיפוש (כדי לא לשמור רק תת‑קבוצה).")
             else:
-                overwrite_sheet_from_a1(creds, spreadsheet_id, worksheet_title, edited_df)
-                st.success("Saved. Refreshing…")
+                # The table is shown in reversed order (view_cols). Save back in original order (base_cols)
+                edited_base_df = edited_df[base_cols]
+                overwrite_sheet_from_a1(creds, spreadsheet_id, worksheet_title, edited_base_df)
+                st.success("נשמר. מרענן…")
                 st.cache_data.clear()
                 st.rerun()
         except Exception as e:
-            st.error(f"Failed to save edits: {e}")
-
-with top_right:
-    st.subheader("Add a row")
-    if df.shape[1] == 0:
-        st.warning(
-            "I couldn't infer columns (sheet may be empty). "
-            "Add headers as the first row directly in Google Sheets, then refresh."
-        )
-        st.stop()
-
-    cols = list(df.columns)
-    with st.form("add_row_form", clear_on_submit=True):
-        inputs = {}
-        for c in cols:
-            inputs[c] = st.text_input(c)
-        submitted = st.form_submit_button("Append row (adds a new person)")
-
-    if submitted:
-        row = [inputs[c] for c in cols]
-        try:
-            append_row(creds, spreadsheet_id, worksheet_title, row)
-            st.success("Row appended. Refreshing…")
-            st.cache_data.clear()
-            st.rerun()
-        except Exception as e:
-            st.error(f"Failed to append row: {e}")
+            st.error(f"נכשל לשמור שינויים: {e}")
