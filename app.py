@@ -10,6 +10,17 @@ from googleapiclient.discovery import build
 DEFAULT_SPREADSHEET_ID = "19261I9RJbS0Cnar6Ex0nnWa_gZqb3lGdM7L-gfv_gWs"
 DEFAULT_ID_COLUMN_NAME = "מספר סידורי"
 
+# Columns that are typically numeric/date and should be displayed LTR + left aligned,
+# even in an overall RTL (Hebrew) UI.
+LTR_VIEW_COLUMN_NAMES = {
+    "תאריך לידה",
+    "ת.ז",
+    'ת"ז',
+    "ת״ז",
+    "תז",
+    "מספר סידורי",
+}
+
 
 SCOPES = [
     # Drive scope isn't required if you only use a known spreadsheetId,
@@ -228,6 +239,48 @@ def sanitize_df_for_sheet(df: pd.DataFrame) -> pd.DataFrame:
     return df2
 
 
+def strip_bidi_marks_df(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Removes common bidi/direction markers that we may inject for better RTL/LTR display.
+    """
+    out = df.copy()
+    marks = [
+        "\u200e",  # LRM
+        "\u200f",  # RLM
+        "\u202a",  # LRE
+        "\u202b",  # RLE
+        "\u202c",  # PDF
+        "\u202d",  # LRO
+        "\u202e",  # RLO
+        "\u2066",  # LRI
+        "\u2067",  # RLI
+        "\u2068",  # FSI
+        "\u2069",  # PDI
+    ]
+
+    def _clean(v: object) -> str:
+        s = "" if v is None else str(v)
+        for m in marks:
+            s = s.replace(m, "")
+        return s
+
+    for c in out.columns:
+        out[c] = out[c].map(_clean)
+    return out
+
+
+def lrm_prefix(s: object) -> str:
+    """
+    Prefix with LRM so numbers/dates render predictably in RTL contexts.
+    """
+    v = "" if s is None else str(s)
+    if not v.strip():
+        return v
+    if v.startswith("\u200e"):
+        return v
+    return "\u200e" + v
+
+
 def overwrite_sheet_from_a1(creds: Credentials, spreadsheet_id: str, worksheet_name: str, df: pd.DataFrame) -> None:
     """
     Overwrites values starting at A1 with: header row + all data rows.
@@ -236,6 +289,7 @@ def overwrite_sheet_from_a1(creds: Credentials, spreadsheet_id: str, worksheet_n
     sheets = build("sheets", "v4", credentials=creds, cache_discovery=False)
 
     df2 = sanitize_df_for_sheet(df)
+    df2 = strip_bidi_marks_df(df2)
 
     # Auto-fill missing IDs (if we can find an ID column)
     forced_id_col = st.secrets.get("id_column_name", DEFAULT_ID_COLUMN_NAME) if hasattr(st, "secrets") else DEFAULT_ID_COLUMN_NAME
@@ -332,11 +386,47 @@ if filter_text.strip():
     display_df = base_df.loc[mask, view_cols]
 
 edited_df = st.data_editor(
-    display_df,
+    # Improve Hebrew RTL UX: show numeric/date columns LTR so values are readable.
+    display_df.assign(
+        **{
+            c: display_df[c].map(lrm_prefix)
+            for c in display_df.columns
+            if str(c).strip() in LTR_VIEW_COLUMN_NAMES
+        }
+    ),
     use_container_width=True,
     hide_index=True,
     num_rows="dynamic",
+    column_config={
+        # Give these columns enough width + keep them as text (we save as strings anyway)
+        c: st.column_config.TextColumn(label=c, width="medium")
+        for c in display_df.columns
+        if str(c).strip() in LTR_VIEW_COLUMN_NAMES
+    },
 )
+
+# Extra CSS: force the numeric/date columns to look LTR + left aligned in the grid.
+ltr_view_cols_present = [c for c in view_cols if str(c).strip() in LTR_VIEW_COLUMN_NAMES]
+ltr_view_col_indices_1_based = [view_cols.index(c) + 1 for c in ltr_view_cols_present]
+if ltr_view_col_indices_1_based:
+    rules = []
+    for idx in ltr_view_col_indices_1_based:
+        rules.append(
+            f"""
+/* Column {idx} */
+[data-testid="stDataFrame"] div[role="row"] > div[role="gridcell"]:nth-child({idx}) {{
+  direction: ltr !important;
+  text-align: left !important;
+  unicode-bidi: plaintext !important;
+}}
+[data-testid="stDataFrame"] div[role="row"] > div[role="gridcell"]:nth-child({idx}) input {{
+  direction: ltr !important;
+  text-align: left !important;
+  unicode-bidi: plaintext !important;
+}}
+"""
+        )
+    st.markdown(f"<style>{''.join(rules)}</style>", unsafe_allow_html=True)
 
 c1, c2, c3, c4 = st.columns([1, 1, 2, 2])
 with c1:
