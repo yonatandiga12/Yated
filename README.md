@@ -51,7 +51,11 @@ Instead, paste its contents into **Secrets**.
 
 1. Deploy your app repo on Streamlit Cloud
 2. Go to your app → **Settings** → **Secrets**
-3. Paste this template and fill it with values from your downloaded service account JSON:
+3. Choose ONE of the options below.
+
+### Option A (recommended): TOML table (key-by-key)
+
+Paste this template and fill it with values from your downloaded service account JSON:
 
 ```toml
 [gcp_service_account]
@@ -73,6 +77,32 @@ Notes:
 
 - Keep the triple quotes around `private_key` exactly like above.
 - The app reads it via `st.secrets["gcp_service_account"]`.
+
+### Option B (easiest): paste the entire JSON key (no conversion)
+
+Paste your **entire** downloaded service account JSON file contents (including `{` and `}`) inside TOML triple-single-quotes:
+
+```toml
+gcp_service_account_json = '''
+{
+  "type": "service_account",
+  "project_id": "....",
+  "private_key_id": "....",
+  "private_key": "-----BEGIN PRIVATE KEY-----\\n...\\n-----END PRIVATE KEY-----\\n",
+  "client_email": "....iam.gserviceaccount.com",
+  "client_id": "....",
+  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+  "token_uri": "https://oauth2.googleapis.com/token",
+  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/...."
+}
+'''
+```
+
+Notes:
+
+- This is valid TOML because the JSON is treated as a single multiline string.
+- The app will parse that JSON internally.
 
 ## Troubleshooting
 

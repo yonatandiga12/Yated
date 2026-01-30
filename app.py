@@ -1,3 +1,5 @@
+import json
+
 import pandas as pd
 import streamlit as st
 
@@ -17,31 +19,50 @@ SCOPES = [
 
 def get_credentials() -> Credentials:
     """
-    Expects Streamlit Secrets:
+    Expects Streamlit Secrets in ONE of these formats:
+
+    Option A (recommended): TOML table (key-by-key)
       [gcp_service_account]
       type = "service_account"
       project_id = "..."
       private_key_id = "..."
-      private_key = "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
+      private_key = "-----BEGIN PRIVATE KEY-----\\n...\\n-----END PRIVATE KEY-----\\n"
       client_email = "....iam.gserviceaccount.com"
       client_id = "..."
       auth_uri = "https://accounts.google.com/o/oauth2/auth"
       token_uri = "https://oauth2.googleapis.com/token"
       auth_provider_x509_cert_url = "https://www.googleapis.com/oauth2/v1/certs"
       client_x509_cert_url = "..."
+
+    Option B (easiest): paste the ENTIRE downloaded JSON key as a TOML multiline string
+      gcp_service_account_json = '''{ ... full JSON ... }'''
     """
     sa_info = st.secrets.get("gcp_service_account")
-    if not sa_info:
-        raise RuntimeError(
-            "Missing Streamlit secret 'gcp_service_account'. "
-            "Add it in Streamlit Cloud → App → Settings → Secrets."
-        )
-    return Credentials.from_service_account_info(dict(sa_info), scopes=SCOPES)
+    if sa_info:
+        return Credentials.from_service_account_info(dict(sa_info), scopes=SCOPES)
+
+    sa_json = st.secrets.get("gcp_service_account_json")
+    if sa_json:
+        if isinstance(sa_json, str):
+            sa_dict = json.loads(sa_json)
+        else:
+            sa_dict = dict(sa_json)
+        return Credentials.from_service_account_info(sa_dict, scopes=SCOPES)
+
+    raise RuntimeError(
+        "Missing Google credentials in Streamlit Secrets.\n\n"
+        "Add EITHER:\n"
+        "- [gcp_service_account] (TOML table)\n"
+        "OR\n"
+        "- gcp_service_account_json = '''{ ... }''' (raw JSON wrapped in TOML)\n\n"
+        "Streamlit Cloud → App → Settings → Secrets."
+    )
 
 
 @st.cache_data(show_spinner=False, ttl=30)
-def find_spreadsheet_file_id(creds: Credentials, folder_id: str, sheet_name: str) -> str:
-    drive = build("drive", "v3", credentials=creds, cache_discovery=False)
+def find_spreadsheet_file_id(_creds: Credentials, folder_id: str, sheet_name: str) -> str:
+    # Note: Streamlit cache can't hash google Credentials objects, so we prefix with _
+    drive = build("drive", "v3", credentials=_creds, cache_discovery=False)
     q = (
         f"'{folder_id}' in parents and "
         "mimeType='application/vnd.google-apps.spreadsheet' and "
