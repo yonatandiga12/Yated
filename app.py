@@ -10,26 +10,7 @@ from googleapiclient.discovery import build
 DEFAULT_SPREADSHEET_ID = "19261I9RJbS0Cnar6Ex0nnWa_gZqb3lGdM7L-gfv_gWs"
 DEFAULT_ID_COLUMN_NAME = "מספר סידורי"
 
-# Columns that are typically numeric/date and should be displayed LTR + left aligned,
-# even in an overall RTL (Hebrew) UI.
-LTR_VIEW_COLUMN_NAMES = {
-    "תאריך לידה",
-    "ת.ז",
-    'ת"ז',
-    "ת״ז",
-    "תז",
-    "מספר סידורי",
-}
-
-# Columns we want to keep visible next to Age in the RTL view (view-only ordering)
-KEY_VIEW_ORDER = [
-    "גיל",
-    "תאריך לידה",
-    "ת.ז",
-    "שם משפחה",
-    "שם חניך",
-    "מספר סידורי",
-]
+# Note: UI is now standard LTR, and columns are shown "as-is" (sheet order).
 
 
 SCOPES = [
@@ -279,18 +260,6 @@ def strip_bidi_marks_df(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def lrm_prefix(s: object) -> str:
-    """
-    Prefix with LRM so numbers/dates render predictably in RTL contexts.
-    """
-    v = "" if s is None else str(s)
-    if not v.strip():
-        return v
-    if v.startswith("\u200e"):
-        return v
-    return "\u200e" + v
-
-
 def overwrite_sheet_from_a1(creds: Credentials, spreadsheet_id: str, worksheet_name: str, df: pd.DataFrame) -> None:
     """
     Overwrites values starting at A1 with: header row + all data rows.
@@ -328,38 +297,6 @@ st.set_page_config(page_title="Google Sheet editor", layout="wide")
 st.title("CRM table (Google Sheets)")
 st.caption("View, edit, and add people rows in your main CRM spreadsheet.")
 
-st.markdown(
-    """
-<style>
-/* Make the app feel RTL for Hebrew */
-html, body, [data-testid="stAppViewContainer"] {
-  direction: rtl;
-}
-[data-testid="stAppViewContainer"] * {
-  direction: rtl;
-  text-align: right;
-}
-/* Force table cells to align right (Streamlit grids can override) */
-[data-testid="stDataFrame"] div[role="gridcell"] {
-  text-align: right !important;
-}
-[data-testid="stDataFrame"] div[role="gridcell"] input {
-  text-align: right !important;
-}
-/* Keep code blocks readable */
-code, pre, textarea {
-  direction: ltr !important;
-  text-align: left !important;
-}
-/* Sidebar RTL */
-[data-testid="stSidebar"] {
-  direction: rtl;
-}
-</style>
-""",
-    unsafe_allow_html=True,
-)
-
 with st.sidebar:
     st.subheader("Spreadsheet")
     # Hide the spreadsheet ID from the UI; keep it configurable via secrets if needed.
@@ -394,24 +331,7 @@ st.caption("Add new people by using the table’s built-in “add row”. Missin
 filter_text = st.text_input("חיפוש מהיר (בכל העמודות)", value="")
 base_df = df
 base_cols = list(base_df.columns)
-rtl_cols = list(reversed(base_cols))  # RTL-friendly base order (reverse)
-
-# Make important columns (around "גיל") easy to find without horizontal scrolling.
-if "גיל" in rtl_cols:
-    age_idx = rtl_cols.index("גיל")
-    view_cols = rtl_cols[age_idx:] + rtl_cols[:age_idx]
-else:
-    view_cols = rtl_cols
-
-# Ensure the key columns are placed first in the view (view-only; does NOT affect sheet).
-ordered_cols: list[str] = []
-for c in KEY_VIEW_ORDER:
-    if c in view_cols and c not in ordered_cols:
-        ordered_cols.append(c)
-for c in view_cols:
-    if c not in ordered_cols:
-        ordered_cols.append(c)
-view_cols = ordered_cols
+view_cols = base_cols  # show columns exactly as they appear in the sheet
 
 display_df = base_df[view_cols]
 if filter_text.strip():
@@ -420,47 +340,11 @@ if filter_text.strip():
     display_df = base_df.loc[mask, view_cols]
 
 edited_df = st.data_editor(
-    # Improve Hebrew RTL UX: show numeric/date columns LTR so values are readable.
-    display_df.assign(
-        **{
-            c: display_df[c].map(lrm_prefix)
-            for c in display_df.columns
-            if str(c).strip() in LTR_VIEW_COLUMN_NAMES
-        }
-    ),
+    display_df,
     use_container_width=True,
     hide_index=True,
     num_rows="dynamic",
-    column_config={
-        # Give these columns enough width + keep them as text (we save as strings anyway)
-        c: st.column_config.TextColumn(label=c, width="medium")
-        for c in display_df.columns
-        if str(c).strip() in LTR_VIEW_COLUMN_NAMES
-    },
 )
-
-# Extra CSS: force numeric/date columns to render LTR (but keep right alignment).
-ltr_view_cols_present = [c for c in view_cols if str(c).strip() in LTR_VIEW_COLUMN_NAMES]
-ltr_view_col_indices_1_based = [view_cols.index(c) + 1 for c in ltr_view_cols_present]
-if ltr_view_col_indices_1_based:
-    rules = []
-    for idx in ltr_view_col_indices_1_based:
-        rules.append(
-            f"""
-/* Column {idx} */
-[data-testid="stDataFrame"] div[role="row"] > div[role="gridcell"]:nth-child({idx}) {{
-  direction: ltr !important;
-  text-align: right !important;
-  unicode-bidi: plaintext !important;
-}}
-[data-testid="stDataFrame"] div[role="row"] > div[role="gridcell"]:nth-child({idx}) input {{
-  direction: ltr !important;
-  text-align: right !important;
-  unicode-bidi: plaintext !important;
-}}
-"""
-        )
-    st.markdown(f"<style>{''.join(rules)}</style>", unsafe_allow_html=True)
 c1, c2, c3, c4 = st.columns([1, 1, 2, 2])
 with c1:
     st.metric("שורות", len(df))
@@ -475,9 +359,7 @@ with c4:
             if filter_text.strip():
                 st.error("כדי לשמור שינויים, קודם לנקות את החיפוש (כדי לא לשמור רק תת‑קבוצה).")
             else:
-                # The table is shown in reversed order (view_cols). Save back in original order (base_cols)
-                edited_base_df = edited_df[base_cols]
-                overwrite_sheet_from_a1(creds, spreadsheet_id, worksheet_title, edited_base_df)
+                overwrite_sheet_from_a1(creds, spreadsheet_id, worksheet_title, edited_df)
                 st.success("נשמר. מרענן…")
                 st.cache_data.clear()
                 st.rerun()
