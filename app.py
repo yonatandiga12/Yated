@@ -7,11 +7,12 @@ from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 
 
-DRIVE_FOLDER_ID = "1XZ9fZUusUYO1IpJFUZ8tlQ0NdIu0tPAq"
-TARGET_SHEET_NAME = "hi"
+DEFAULT_SPREADSHEET_ID = "19261I9RJbS0Cnar6Ex0nnWa_gZqb3lGdM7L-gfv_gWs"
 
 
 SCOPES = [
+    # Drive scope isn't required if you only use a known spreadsheetId,
+    # but keeping it read-only is useful if you later add file listing.
     "https://www.googleapis.com/auth/drive.readonly",
     "https://www.googleapis.com/auth/spreadsheets",
 ]
@@ -60,26 +61,9 @@ def get_credentials() -> Credentials:
 
 
 @st.cache_data(show_spinner=False, ttl=30)
-def find_spreadsheet_file_id(_creds: Credentials, folder_id: str, sheet_name: str) -> str:
-    # Note: Streamlit cache can't hash google Credentials objects, so we prefix with _
-    drive = build("drive", "v3", credentials=_creds, cache_discovery=False)
-    q = (
-        f"'{folder_id}' in parents and "
-        "mimeType='application/vnd.google-apps.spreadsheet' and "
-        f"name='{sheet_name}' and trashed=false"
-    )
-    res = (
-        drive.files()
-        .list(q=q, fields="files(id,name)", pageSize=10, supportsAllDrives=True)
-        .execute()
-    )
-    files = res.get("files", [])
-    if not files:
-        raise RuntimeError(
-            f"Couldn't find a Google Sheet named '{sheet_name}' in that folder. "
-            "Make sure the folder is shared with the service account email."
-        )
-    return files[0]["id"]
+def get_spreadsheet_metadata(_creds: Credentials, spreadsheet_id: str) -> dict:
+    sheets = build("sheets", "v4", credentials=_creds, cache_discovery=False)
+    return sheets.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
 
 
 def _a1_range_for_all(sheet_name: str) -> str:
@@ -101,21 +85,13 @@ def _normalize_headers(headers: list[str], width: int) -> list[str]:
     return out
 
 
-def read_sheet_as_df(creds: Credentials, spreadsheet_id: str, worksheet_name: str = None) -> pd.DataFrame:
-    sheets = build("sheets", "v4", credentials=creds, cache_discovery=False)
+@st.cache_data(show_spinner=False, ttl=30)
+def read_sheet_as_df(_creds: Credentials, spreadsheet_id: str, worksheet_name: str) -> pd.DataFrame:
+    sheets = build("sheets", "v4", credentials=_creds, cache_discovery=False)
 
-    meta = sheets.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
-    sheet_titles = [s["properties"]["title"] for s in meta.get("sheets", [])]
-    if not sheet_titles:
-        return pd.DataFrame()
-
-    title = worksheet_name or sheet_titles[0]
-    values_resp = (
-        sheets.spreadsheets()
-        .values()
-        .get(spreadsheetId=spreadsheet_id, range=_a1_range_for_all(title))
-        .execute()
-    )
+    values_resp = sheets.spreadsheets().values().get(
+        spreadsheetId=spreadsheet_id, range=_a1_range_for_all(worksheet_name)
+    ).execute()
     values = values_resp.get("values", [])
     if not values:
         return pd.DataFrame()
@@ -164,27 +140,61 @@ def append_row(creds: Credentials, spreadsheet_id: str, worksheet_name: str, row
     ).execute()
 
 
-def get_first_worksheet_title(creds: Credentials, spreadsheet_id: str) -> str:
+def list_worksheet_titles(meta: dict) -> list[str]:
+    return [s["properties"]["title"] for s in meta.get("sheets", [])]
+
+
+def sanitize_df_for_sheet(df: pd.DataFrame) -> pd.DataFrame:
+    df2 = df.copy()
+    df2.columns = [str(c).strip() for c in df2.columns]
+    df2 = df2.where(pd.notnull(df2), "")
+    # Ensure serializable simple scalars
+    for c in df2.columns:
+        df2[c] = df2[c].map(lambda v: "" if v is None else str(v))
+    return df2
+
+
+def overwrite_sheet_from_a1(creds: Credentials, spreadsheet_id: str, worksheet_name: str, df: pd.DataFrame) -> None:
+    """
+    Overwrites values starting at A1 with: header row + all data rows.
+    Clears a reasonably large area first to avoid stale leftover cells.
+    """
     sheets = build("sheets", "v4", credentials=creds, cache_discovery=False)
-    meta = sheets.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
-    sheet_titles = [s["properties"]["title"] for s in meta.get("sheets", [])]
-    return sheet_titles[0] if sheet_titles else "Sheet1"
+
+    df2 = sanitize_df_for_sheet(df)
+    values = [list(df2.columns)] + df2.values.tolist()
+
+    # Clear a big block to remove old leftovers (values only; formatting stays).
+    clear_end_col = _col_num_to_a1(max(26, len(df2.columns) + 10))  # at least A:Z
+    clear_range = f"'{worksheet_name}'!A1:{clear_end_col}5000"
+    sheets.spreadsheets().values().clear(
+        spreadsheetId=spreadsheet_id, range=clear_range, body={}
+    ).execute()
+
+    # Write new values from A1
+    sheets.spreadsheets().values().update(
+        spreadsheetId=spreadsheet_id,
+        range=f"'{worksheet_name}'!A1",
+        valueInputOption="USER_ENTERED",
+        body={"values": values},
+    ).execute()
 
 
 st.set_page_config(page_title="Google Sheet editor", layout="wide")
-st.title("Google Sheet viewer + row adder")
-st.caption("Reads the Google Sheet named 'hi' from your Drive folder, and appends rows.")
+st.title("CRM table (Google Sheets)")
+st.caption("View, edit, and add people rows in your main CRM spreadsheet.")
 
 with st.sidebar:
-    st.subheader("Source")
-    st.text(f"Drive folder: {DRIVE_FOLDER_ID}")
-    st.text(f"Sheet name: {TARGET_SHEET_NAME}")
-    refresh = st.button("Refresh table")
+    st.subheader("Spreadsheet")
+    spreadsheet_id = st.text_input("Spreadsheet ID", value=DEFAULT_SPREADSHEET_ID)
+    refresh = st.button("Refresh data")
 
 try:
     creds = get_credentials()
-    spreadsheet_id = find_spreadsheet_file_id(creds, DRIVE_FOLDER_ID, TARGET_SHEET_NAME)
-    worksheet_title = get_first_worksheet_title(creds, spreadsheet_id)
+    meta = get_spreadsheet_metadata(creds, spreadsheet_id)
+    titles = list_worksheet_titles(meta)
+    if not titles:
+        raise RuntimeError("Spreadsheet has no worksheets (tabs).")
 except Exception as e:
     st.error(str(e))
     st.stop()
@@ -192,18 +202,58 @@ except Exception as e:
 if refresh:
     st.cache_data.clear()
 
+with st.sidebar:
+    worksheet_title = st.selectbox("Worksheet (tab)", options=titles, index=0)
+
 df = read_sheet_as_df(creds, spreadsheet_id, worksheet_name=worksheet_title)
 
-left, right = st.columns([2, 1], gap="large")
+top_left, top_right = st.columns([3, 2], gap="large")
 
-with left:
-    st.subheader("Current data")
+with top_left:
+    st.subheader("Saved data")
     if df.empty:
-        st.info("Sheet is empty (or only has headers). Add the first row using the form on the right.")
-    else:
-        st.dataframe(df, use_container_width=True, hide_index=True)
+        st.info("Sheet looks empty. Add headers in row 1 in Google Sheets, then refresh.")
+        st.stop()
 
-with right:
+    filter_text = st.text_input("Quick filter (search across all columns)", value="")
+    display_df = df
+    if filter_text.strip():
+        needle = filter_text.strip().lower()
+        mask = df.astype(str).apply(lambda row: row.str.lower().str.contains(needle, na=False)).any(axis=1)
+        display_df = df[mask]
+
+    st.caption("Tip: you can edit cells directly in the grid below, add rows, then click Save edits.")
+    edited_df = st.data_editor(
+        display_df,
+        use_container_width=True,
+        hide_index=True,
+        num_rows="dynamic",
+    )
+
+    c1, c2, c3 = st.columns([1, 1, 2])
+    with c1:
+        st.metric("Rows", len(df))
+    with c2:
+        st.metric("Columns", len(df.columns))
+    with c3:
+        csv = df.to_csv(index=False).encode("utf-8-sig")
+        st.download_button("Download CSV", data=csv, file_name="crm_export.csv", mime="text/csv")
+
+    if st.button("Save edits to Google Sheets", type="primary"):
+        try:
+            # If user filtered, we must avoid accidentally saving only filtered subset.
+            # So: if a filter is active, block saving (to avoid data loss).
+            if filter_text.strip():
+                st.error("Clear the filter before saving edits (to avoid overwriting with a subset).")
+            else:
+                overwrite_sheet_from_a1(creds, spreadsheet_id, worksheet_title, edited_df)
+                st.success("Saved. Refreshing…")
+                st.cache_data.clear()
+                st.rerun()
+        except Exception as e:
+            st.error(f"Failed to save edits: {e}")
+
+with top_right:
     st.subheader("Add a row")
     if df.shape[1] == 0:
         st.warning(
@@ -217,12 +267,14 @@ with right:
         inputs = {}
         for c in cols:
             inputs[c] = st.text_input(c)
-        submitted = st.form_submit_button("Append row")
+        submitted = st.form_submit_button("Append row (adds a new person)")
 
     if submitted:
         row = [inputs[c] for c in cols]
         try:
             append_row(creds, spreadsheet_id, worksheet_title, row)
-            st.success("Row appended. Click Refresh table to see it.")
+            st.success("Row appended. Refreshing…")
+            st.cache_data.clear()
+            st.rerun()
         except Exception as e:
             st.error(f"Failed to append row: {e}")
