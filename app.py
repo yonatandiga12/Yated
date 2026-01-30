@@ -1,5 +1,8 @@
 import json
 
+import re
+from datetime import date
+
 import pandas as pd
 import streamlit as st
 
@@ -11,6 +14,14 @@ DEFAULT_SPREADSHEET_ID = "19261I9RJbS0Cnar6Ex0nnWa_gZqb3lGdM7L-gfv_gWs"
 DEFAULT_ID_COLUMN_NAME = "מספר סידורי"
 
 # Note: UI is now standard LTR, and columns are shown "as-is" (sheet order).
+
+MORNING_FRAMEWORK_OPTIONS = ["יסודות", "שחר", "דקלים", "אילנות", "מע'ש", "מרכז יותם"]
+MORNING_FRAMEWORK_RED_VALUES = {"שחר", "דקלים", "יסודות"}
+ARRIVAL_OPTIONS = ["מגיע", "לא מגיע"]
+ARRIVAL_NOT_COMING_VALUE = "לא מגיע"
+
+DAYS_ALLOWED = {"שני", "שלישי", "רביעי"}
+PAYMENT_PER_DAY = 80
 
 
 SCOPES = [
@@ -260,6 +271,170 @@ def strip_bidi_marks_df(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def _is_blank_cell(v: object) -> bool:
+    if v is None:
+        return True
+    s = str(v).strip()
+    return s == "" or s.lower() == "nan"
+
+
+def _parse_pa_id(v: object) -> int | None:
+    """
+    Parses IDs of the form Pa001 / pa12 and returns the numeric part.
+    """
+    if v is None:
+        return None
+    s = str(v).strip()
+    m = re.match(r"(?i)^pa(\d+)$", s)
+    if not m:
+        return None
+    try:
+        return int(m.group(1))
+    except Exception:
+        return None
+
+
+def _format_pa_id(n: int) -> str:
+    return f"Pa{str(n).zfill(3)}"
+
+
+def autofill_missing_pa_ids(df: pd.DataFrame, id_col: str) -> pd.DataFrame:
+    """
+    If `id_col` exists, fills blank IDs with Pa001, Pa002, ... continuing from max existing PaNNN.
+    Does not modify non-blank IDs.
+    """
+    if id_col not in df.columns:
+        return df
+
+    out = df.copy()
+    existing_nums: list[int] = []
+    for v in out[id_col].tolist():
+        n = _parse_pa_id(v)
+        if n is not None:
+            existing_nums.append(n)
+    next_n = max(existing_nums) + 1 if existing_nums else 1
+
+    for idx in out.index.tolist():
+        if _is_blank_cell(out.at[idx, id_col]):
+            out.at[idx, id_col] = _format_pa_id(next_n)
+            next_n += 1
+
+    return out
+
+
+def _parse_birthdate_to_date(v: object) -> date | None:
+    """
+    Tries to parse a date from common Sheets/Excel representations.
+    """
+    if v is None:
+        return None
+    s = str(v).strip()
+    if not s or s.lower() == "nan":
+        return None
+
+    # Try pandas parsing first (common: dd/mm/yyyy in IL)
+    dt = pd.to_datetime(s, errors="coerce", dayfirst=True)
+    if pd.notna(dt):
+        try:
+            return dt.date()
+        except Exception:
+            pass
+
+    # Try Excel serial day number
+    try:
+        # Sheets sometimes returns integers for dates depending on formatting
+        f = float(s)
+        dt2 = pd.to_datetime(f, unit="D", origin="1899-12-30", errors="coerce")
+        if pd.notna(dt2):
+            return dt2.date()
+    except Exception:
+        pass
+
+    return None
+
+
+def _calculate_age_years(born: date, today: date) -> int:
+    years = today.year - born.year
+    if (today.month, today.day) < (born.month, born.day):
+        years -= 1
+    return max(0, years)
+
+
+def compute_age_column(df: pd.DataFrame, birthdate_col: str, age_col: str) -> pd.DataFrame:
+    """
+    Overwrites/creates age column based on birthdate column.
+    """
+    if birthdate_col not in df.columns:
+        return df
+    out = df.copy()
+    today = date.today()
+    ages: list[str] = []
+    for v in out[birthdate_col].tolist():
+        born = _parse_birthdate_to_date(v)
+        if born is None:
+            ages.append("")
+        else:
+            ages.append(str(_calculate_age_years(born, today)))
+    if age_col in out.columns:
+        out[age_col] = ages
+    else:
+        out.insert(len(out.columns), age_col, ages)
+    return out
+
+
+def _count_allowed_days(text: object) -> int:
+    if text is None:
+        return 0
+    s = str(text).strip()
+    if not s or s.lower() == "nan":
+        return 0
+    parts = [p.strip() for p in s.split(",")]
+    parts = [p for p in parts if p]
+    # Count unique allowed values
+    return len({p for p in parts if p in DAYS_ALLOWED})
+
+
+def compute_required_payment(df: pd.DataFrame, days_col: str, payment_col: str) -> pd.DataFrame:
+    """
+    Sets payment_col = count(ימי הגעה)*80, counting unique allowed values in DAYS_ALLOWED.
+    """
+    if days_col not in df.columns:
+        return df
+    out = df.copy()
+    payments = [str(_count_allowed_days(v) * PAYMENT_PER_DAY) for v in out[days_col].tolist()]
+    if payment_col in out.columns:
+        out[payment_col] = payments
+    else:
+        out.insert(len(out.columns), payment_col, payments)
+    return out
+
+
+def move_not_coming_to_bottom(df: pd.DataFrame, arrival_col: str) -> pd.DataFrame:
+    """
+    Stable sort: rows with arrival == 'לא מגיע' go to the end.
+    """
+    if arrival_col not in df.columns:
+        return df
+    out = df.copy()
+    key = out[arrival_col].astype(str).map(lambda v: str(v).strip())
+    out["_yated_sort_not_coming"] = (key == ARRIVAL_NOT_COMING_VALUE).astype(int)
+    out = out.sort_values("_yated_sort_not_coming", kind="mergesort").drop(columns=["_yated_sort_not_coming"])
+    return out
+
+
+def apply_business_rules(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Applies all CRM rules before saving.
+    """
+    out = sanitize_df_for_sheet(df)
+    out = strip_bidi_marks_df(out)
+    out = autofill_missing_pa_ids(out, DEFAULT_ID_COLUMN_NAME)
+    out = compute_age_column(out, birthdate_col="תאריך לידה", age_col="גיל")
+    out = compute_required_payment(out, days_col="ימי הגעה", payment_col="תשלום נדרש")
+    out = move_not_coming_to_bottom(out, arrival_col="הגעה")
+    return out
+
+
 def overwrite_sheet_from_a1(creds: Credentials, spreadsheet_id: str, worksheet_name: str, df: pd.DataFrame) -> None:
     """
     Overwrites values starting at A1 with: header row + all data rows.
@@ -267,14 +442,7 @@ def overwrite_sheet_from_a1(creds: Credentials, spreadsheet_id: str, worksheet_n
     """
     sheets = build("sheets", "v4", credentials=creds, cache_discovery=False)
 
-    df2 = sanitize_df_for_sheet(df)
-    df2 = strip_bidi_marks_df(df2)
-
-    # Auto-fill missing IDs (if we can find an ID column)
-    forced_id_col = st.secrets.get("id_column_name", DEFAULT_ID_COLUMN_NAME) if hasattr(st, "secrets") else DEFAULT_ID_COLUMN_NAME
-    id_col = forced_id_col or guess_id_column_name(list(df2.columns))
-    if id_col:
-        df2 = autofill_missing_ids_by_appearance(df2, id_col)
+    df2 = apply_business_rules(df)
     values = [list(df2.columns)] + df2.values.tolist()
 
     # Clear a big block to remove old leftovers (values only; formatting stays).
@@ -339,12 +507,87 @@ if filter_text.strip():
     mask = base_df.astype(str).apply(lambda row: row.str.lower().str.contains(needle, na=False)).any(axis=1)
     display_df = base_df.loc[mask, view_cols]
 
+custom_framework = st.text_input("מסגרת בוקר: הוסף ערך חופשי לרשימה (אופציונלי)", value="")
+if "morning_framework_custom_options" not in st.session_state:
+    st.session_state["morning_framework_custom_options"] = []
+if st.button("הוסף לרשימה"):
+    v = custom_framework.strip()
+    if v and v not in st.session_state["morning_framework_custom_options"]:
+        st.session_state["morning_framework_custom_options"].append(v)
+
+morning_col_name = "מסגרת בוקר"
+arrival_col_name = "הגעה"
+days_col_name = "ימי הגעה"
+payment_col_name = "תשלום נדרש"
+age_col_name = "גיל"
+
+# Build dropdown options (fixed + existing values + user-added custom values)
+morning_existing = []
+if morning_col_name in display_df.columns:
+    morning_existing = [str(v).strip() for v in display_df[morning_col_name].tolist() if not _is_blank_cell(v)]
+    morning_existing = sorted({v for v in morning_existing if v})
+morning_options = []
+for v in MORNING_FRAMEWORK_OPTIONS + morning_existing + st.session_state["morning_framework_custom_options"]:
+    if v not in morning_options:
+        morning_options.append(v)
+
+disabled_cols = [c for c in [age_col_name, payment_col_name] if c in display_df.columns]
+
 edited_df = st.data_editor(
     display_df,
     use_container_width=True,
     hide_index=True,
     num_rows="dynamic",
+    disabled=disabled_cols,
+    column_config={
+        **(
+            {
+                morning_col_name: st.column_config.SelectboxColumn(
+                    label=morning_col_name,
+                    options=morning_options,
+                    help="אפשר לבחור מהרשימה. כדי להוסיף ערך חופשי חדש, השתמש בשדה 'הוסף לרשימה' מעל.",
+                    required=False,
+                )
+            }
+            if morning_col_name in display_df.columns
+            else {}
+        ),
+        **(
+            {
+                arrival_col_name: st.column_config.SelectboxColumn(
+                    label=arrival_col_name,
+                    options=ARRIVAL_OPTIONS,
+                    required=False,
+                )
+            }
+            if arrival_col_name in display_df.columns
+            else {}
+        ),
+        **(
+            {
+                days_col_name: st.column_config.TextColumn(
+                    label=days_col_name,
+                    help='הכנס ערכים מופרדים בפסיקים, למשל: "שני, שלישי". הערכים הנתמכים: שני, שלישי, רביעי.',
+                )
+            }
+            if days_col_name in display_df.columns
+            else {}
+        ),
+    },
 )
+
+with st.expander("תצוגה צבעונית (לקריאה בלבד)"):
+    if morning_col_name in display_df.columns:
+        def _style_morning_cell(v: object) -> str:
+            s = "" if v is None else str(v).strip()
+            if s in MORNING_FRAMEWORK_RED_VALUES:
+                return "background-color: #ffb3b3;"
+            return ""
+
+        styled = display_df.style.applymap(_style_morning_cell, subset=[morning_col_name])
+        st.dataframe(styled, use_container_width=True)
+    else:
+        st.info(f"העמודה '{morning_col_name}' לא נמצאה בגיליון.")
 c1, c2, c3, c4 = st.columns([1, 1, 2, 2])
 with c1:
     st.metric("שורות", len(df))
