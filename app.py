@@ -427,7 +427,6 @@ if ltr_view_col_indices_1_based:
 """
         )
     st.markdown(f"<style>{''.join(rules)}</style>", unsafe_allow_html=True)
-
 c1, c2, c3, c4 = st.columns([1, 1, 2, 2])
 with c1:
     st.metric("שורות", len(df))
