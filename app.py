@@ -126,15 +126,41 @@ def read_sheet_as_df(creds: Credentials, spreadsheet_id: str, worksheet_name: st
     return pd.DataFrame(rows, columns=headers)
 
 
+def _col_num_to_a1(col_num_1_based: int) -> str:
+    # 1 -> A, 26 -> Z, 27 -> AA, ...
+    if col_num_1_based <= 0:
+        raise ValueError("col_num_1_based must be >= 1")
+    s = ""
+    n = col_num_1_based
+    while n > 0:
+        n, r = divmod(n - 1, 26)
+        s = chr(65 + r) + s
+    return s
+
+
 def append_row(creds: Credentials, spreadsheet_id: str, worksheet_name: str, row_values: list[str]) -> None:
+    """
+    Writes the new row starting from column A to avoid "shifting" into new columns.
+    """
     sheets = build("sheets", "v4", credentials=creds, cache_discovery=False)
-    body = {"values": [row_values]}
-    sheets.spreadsheets().values().append(
+
+    end_col = _col_num_to_a1(max(1, len(row_values)))
+    read_range = f"'{worksheet_name}'!A1:{end_col}"
+    existing = (
+        sheets.spreadsheets()
+        .values()
+        .get(spreadsheetId=spreadsheet_id, range=read_range)
+        .execute()
+    )
+    existing_values = existing.get("values", [])
+    next_row = len(existing_values) + 1  # 1-based
+
+    write_range = f"'{worksheet_name}'!A{next_row}:{end_col}{next_row}"
+    sheets.spreadsheets().values().update(
         spreadsheetId=spreadsheet_id,
-        range=_a1_range_for_all(worksheet_name),
+        range=write_range,
         valueInputOption="USER_ENTERED",
-        insertDataOption="INSERT_ROWS",
-        body=body,
+        body={"values": [row_values]},
     ).execute()
 
 
@@ -179,7 +205,7 @@ with left:
 
 with right:
     st.subheader("Add a row")
-    if df.empty:
+    if df.shape[1] == 0:
         st.warning(
             "I couldn't infer columns (sheet may be empty). "
             "Add headers as the first row directly in Google Sheets, then refresh."
