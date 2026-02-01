@@ -545,16 +545,25 @@ def compute_required_payment(df: pd.DataFrame, days_col: str, payment_col: str) 
     return out
 
 
-def move_not_coming_to_bottom(df: pd.DataFrame, arrival_col: str) -> pd.DataFrame:
+NAME_COL = "שם חניך"
+
+
+def move_not_coming_to_bottom(df: pd.DataFrame, arrival_col: str, name_col: str | None = None) -> pd.DataFrame:
     """
-    Stable sort: rows with arrival == 'לא מגיע' go to the end.
+    Sort: rows with arrival == 'לא מגיע' go to the end.
+    If name_col is provided and present, sort alphabetically by name within each group
+    (coming first by name A–Z, then not-coming by name A–Z).
     """
     if arrival_col not in df.columns:
         return df
     out = df.copy()
     key = out[arrival_col].astype(str).map(lambda v: str(v).strip())
     out["_yated_sort_not_coming"] = (key == ARRIVAL_NOT_COMING_VALUE).astype(int)
-    out = out.sort_values("_yated_sort_not_coming", kind="mergesort").drop(columns=["_yated_sort_not_coming"])
+    if name_col and name_col in out.columns:
+        out = out.sort_values(["_yated_sort_not_coming", name_col], kind="mergesort")
+    else:
+        out = out.sort_values("_yated_sort_not_coming", kind="mergesort")
+    out = out.drop(columns=["_yated_sort_not_coming"])
     return out
 
 
@@ -570,7 +579,7 @@ def apply_business_rules(df: pd.DataFrame) -> pd.DataFrame:
     out = normalize_and_autofill_serial_numbers(out, DEFAULT_ID_COLUMN_NAME)
     out = compute_age_column(out, birthdate_col="תאריך לידה", age_col="גיל")
     out = compute_required_payment(out, days_col="ימי הגעה", payment_col="תשלום נדרש")
-    out = move_not_coming_to_bottom(out, arrival_col="הגעה")
+    out = move_not_coming_to_bottom(out, arrival_col="הגעה", name_col=NAME_COL)
     return out
 
 
@@ -627,6 +636,7 @@ with st.sidebar:
     worksheet_title = st.selectbox("Worksheet (tab)", options=titles, index=0)
 
 df = read_sheet_as_df(creds, spreadsheet_id, worksheet_name=worksheet_title)
+df = move_not_coming_to_bottom(df, arrival_col="הגעה", name_col=NAME_COL)
 
 st.subheader("Saved data (edit directly in the table)")
 if df.empty:
