@@ -203,6 +203,83 @@ if page == "Participants":
 
         df["Media Consent"] = df["Media Consent"].map(_to_bool).fillna(False).astype(bool)
 
+    with st.expander("Add New Participant", expanded=False):
+        with st.form("add_participant_form"):
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                first_name = st.text_input("First Name")
+                last_name = st.text_input("Last Name")
+                id_number = st.text_input("ID Number")
+                dob = st.date_input("Date of Birth", value=date(2005, 1, 1))
+                attendance = st.checkbox("Attendance (checked = attending)", value=True)
+            with c2:
+                allergies = st.text_input("Allergies")
+                morning_framework = st.selectbox("Morning Framework", options=[""] + MORNING_FRAMEWORK_OPTIONS)
+                mother_name = st.text_input("Mother Name")
+                mother_phone = st.text_input("Mother Phone")
+                father_name = st.text_input("Father Name")
+            with c3:
+                father_phone = st.text_input("Father Phone")
+                media_consent = st.checkbox("Media Consent (current year)", value=False)
+                pickup = st.text_input("Pickup Address")
+                dropoff = st.text_input("Drop-off Address")
+                attendance_days = st.multiselect("Attendance Days", options=DAYS_OPTIONS, default=[])
+                tshirt = st.text_input("T-shirt Size")
+                notes = st.text_area("Special Notes", height=80)
+
+            submit_new = st.form_submit_button("Add Participant")
+
+        if submit_new:
+            new_row = {
+                "Serial Number": "",
+                "First Name": first_name,
+                "Last Name": last_name,
+                "ID Number": id_number,
+                "Date of Birth": dob.isoformat() if dob else "",
+                "Age": "",
+                "Allergies": allergies,
+                "Morning Framework": morning_framework,
+                "Mother Name": mother_name,
+                "Mother Phone": mother_phone,
+                "Father Name": father_name,
+                "Father Phone": father_phone,
+                "Media Consent": media_consent,
+                "Media Consent Year": "",
+                "Pickup Address": pickup,
+                "Drop-off Address": dropoff,
+                "Attendance": attendance,
+                "Attendance Days": attendance_days,
+                "Required Payment": "",
+                "T-shirt Size": tshirt,
+                "Special Notes": notes,
+            }
+            df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+            try:
+                current_year = date.today().year
+                df_to_save = normalize_media_consent_for_save(
+                    df,
+                    consent_col="Media Consent",
+                    year_col="Media Consent Year",
+                    current_year=current_year,
+                )
+                out = apply_participant_rules(
+                    df_to_save,
+                    id_col="Serial Number",
+                    birthdate_col="Date of Birth",
+                    age_col="Age",
+                    days_col="Attendance Days",
+                    payment_col="Required Payment",
+                    attendance_col="Attendance",
+                    consent_col="Media Consent",
+                    consent_year_col="Media Consent Year",
+                    current_year=current_year,
+                    name_cols=["First Name", "Last Name"],
+                )
+                write_df(service, spreadsheet_id, PARTICIPANTS_SHEET, out)
+                st.success("Participant added.")
+            except Exception as e:
+                st.error(f"Add failed: {e}")
+
     morning_alert_mask = build_morning_framework_alert_mask(
         df, birthdate_col="Date of Birth", framework_col="Morning Framework"
     )
