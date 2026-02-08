@@ -209,20 +209,8 @@ if page == "Participants":
             return "background-color: #ffd6a5;"
         return ""
 
-    styler = df.style
-    if "Morning Framework" in df.columns:
-        styler = styler.apply(
-            lambda r: [_style_morning_framework(v, r.name) if c == "Morning Framework" else "" for c, v in r.items()],
-            axis=1,
-        )
-    if "Media Consent" in df.columns:
-        styler = styler.apply(
-            lambda r: [_style_media_consent(v, r.name) if c == "Media Consent" else "" for c, v in r.items()],
-            axis=1,
-        )
-
     edited_df = st.data_editor(
-        styler,
+        df,
         use_container_width=True,
         hide_index=True,
         num_rows="dynamic",
@@ -248,6 +236,19 @@ if page == "Participants":
             ),
         },
     )
+    st.caption("Highlight preview (red = morning framework alert, orange = media consent needed).")
+    styler = df.style
+    if "Morning Framework" in df.columns:
+        styler = styler.apply(
+            lambda r: [_style_morning_framework(v, r.name) if c == "Morning Framework" else "" for c, v in r.items()],
+            axis=1,
+        )
+    if "Media Consent" in df.columns:
+        styler = styler.apply(
+            lambda r: [_style_media_consent(v, r.name) if c == "Media Consent" else "" for c, v in r.items()],
+            axis=1,
+        )
+    st.dataframe(styler, use_container_width=True)
 
     if st.button("Save Participant Details", type="primary"):
         try:
@@ -407,13 +408,8 @@ if page == "Staff Details":
             return "background-color: #ffb3b3;"
         return ""
 
-    styler = staff_df.style.apply(
-        lambda r: [_style_police(v, r.name) if c == "Police Clearance" else "" for c, v in r.items()],
-        axis=1,
-    )
-
     edited = st.data_editor(
-        styler,
+        staff_df,
         use_container_width=True,
         hide_index=True,
         num_rows="dynamic",
@@ -434,6 +430,12 @@ if page == "Staff Details":
             ),
         },
     )
+    st.caption("Highlight preview (red = police clearance needed).")
+    styler = staff_df.style.apply(
+        lambda r: [_style_police(v, r.name) if c == "Police Clearance" else "" for c, v in r.items()],
+        axis=1,
+    )
+    st.dataframe(styler, use_container_width=True)
 
     if st.button("Save Staff Details", type="primary"):
         try:
