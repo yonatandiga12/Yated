@@ -487,6 +487,14 @@ if page == "Staff Details":
         staff_df, gender_col="Gender", clearance_col="Police Clearance"
     )
     staff_df = police_state.df
+    if "Police Clearance" in staff_df.columns:
+        def _to_bool(v: object) -> bool:
+            if isinstance(v, bool):
+                return v
+            s = "" if v is None else str(v).strip().lower()
+            return s in {"true", "1", "✓", "yes", "y"}
+
+        staff_df["Police Clearance"] = staff_df["Police Clearance"].map(_to_bool).fillna(False).astype(bool)
 
     def _style_police(val, row_idx):
         if row_idx < len(police_state.needs_attention) and police_state.needs_attention[row_idx]:
@@ -515,6 +523,48 @@ if page == "Staff Details":
             ),
         },
     )
+    with st.expander("Add New Staff Member", expanded=False):
+        with st.form("add_staff_form"):
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                first_name = st.text_input("First Name")
+                last_name = st.text_input("Last Name")
+                gender = st.selectbox("Gender", options=["", "Male", "Female"])
+                scholarship = st.selectbox("Scholarship", options=[""] + sorted(SCHOLARSHIP_OPTIONS))
+                current_day = st.selectbox("Current Day", options=[""] + DAYS_OPTIONS)
+            with c2:
+                role = st.text_input("Role (Instructor/Professional)")
+                transportation = st.text_input("Transportation")
+                weekly_hours = st.text_input("Weekly Hours")
+                annual_hours = st.text_input("Annual Hours")
+            with c3:
+                police_clearance = st.checkbox("Police Clearance", value=False)
+
+            submit_staff = st.form_submit_button("Add Staff")
+
+        if submit_staff:
+            new_row = {
+                "Serial Number": "",
+                "First Name": first_name,
+                "Last Name": last_name,
+                "Gender": gender,
+                "Scholarship": scholarship,
+                "Current Day": current_day,
+                "Role": role,
+                "Transportation": transportation,
+                "Weekly Hours": weekly_hours,
+                "Annual Hours": annual_hours,
+                "Hourly Total": "",
+                "Remaining Hours": "",
+                "Police Clearance": police_clearance,
+            }
+            staff_df = pd.concat([staff_df, pd.DataFrame([new_row])], ignore_index=True)
+            try:
+                to_save = normalize_police_clearance_for_save(staff_df, clearance_col="Police Clearance")
+                write_df(service, spreadsheet_id, STAFF_DETAILS_SHEET, to_save)
+                st.success("Staff member added.")
+            except Exception as e:
+                st.error(f"Add failed: {e}")
     st.caption("Highlight preview (red = police clearance needed).")
     styler = staff_df.style.apply(
         lambda r: [_style_police(v, r.name) if c == "Police Clearance" else "" for c, v in r.items()],
