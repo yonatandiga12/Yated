@@ -194,6 +194,8 @@ if page == "Participants":
         current_year=current_year,
     )
     df = consent_state.df
+    if "Media Consent" in df.columns:
+        df["Media Consent"] = df["Media Consent"].map(lambda v: bool(v))
 
     morning_alert_mask = build_morning_framework_alert_mask(
         df, birthdate_col="Date of Birth", framework_col="Morning Framework"
@@ -211,7 +213,7 @@ if page == "Participants":
 
     edited_df = st.data_editor(
         df,
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
         num_rows="dynamic",
         disabled=["Serial Number", "Age", "Required Payment"],
@@ -248,7 +250,7 @@ if page == "Participants":
             lambda r: [_style_media_consent(v, r.name) if c == "Media Consent" else "" for c, v in r.items()],
             axis=1,
         )
-    st.dataframe(styler, use_container_width=True)
+    st.dataframe(styler, width="stretch")
 
     if st.button("Save Participant Details", type="primary"):
         try:
@@ -326,7 +328,7 @@ if page == "Participant Attendance":
 
         edited = st.data_editor(
             base,
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
             num_rows="dynamic",
             column_config={
@@ -360,7 +362,7 @@ if page == "Participant Attendance Summary":
             name_col="Participant Name",
             attended_col="Attended",
         )
-        st.dataframe(summary_df, use_container_width=True)
+        st.dataframe(summary_df, width="stretch")
         if st.button("Write Summary to Sheet"):
             write_df(service, spreadsheet_id, PARTICIPANTS_ATTENDANCE_SUMMARY, summary_df)
             st.success("Summary updated.")
@@ -410,7 +412,7 @@ if page == "Staff Details":
 
     edited = st.data_editor(
         staff_df,
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
         num_rows="dynamic",
         column_config={
@@ -435,7 +437,7 @@ if page == "Staff Details":
         lambda r: [_style_police(v, r.name) if c == "Police Clearance" else "" for c, v in r.items()],
         axis=1,
     )
-    st.dataframe(styler, use_container_width=True)
+    st.dataframe(styler, width="stretch")
 
     if st.button("Save Staff Details", type="primary"):
         try:
@@ -453,7 +455,7 @@ if page == "Staff Backup":
     if backup_df.empty:
         st.info("No backup data yet.")
     else:
-        st.dataframe(backup_df, use_container_width=True)
+        st.dataframe(backup_df, width="stretch")
 
 
 if page == "Staff Attendance":
@@ -505,7 +507,7 @@ if page == "Staff Attendance":
 
         edited = st.data_editor(
             base,
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
             num_rows="dynamic",
             column_config={
@@ -578,7 +580,7 @@ if page == "Payments":
 
     if not payments_df.empty:
         st.subheader("Payments Table")
-        st.dataframe(payments_df, use_container_width=True)
+        st.dataframe(payments_df, width="stretch")
 
 
 if page == "Billing":
@@ -615,7 +617,7 @@ if page == "Billing":
                     axis=1,
                 )
 
-        st.dataframe(styler, use_container_width=True)
+        st.dataframe(styler, width="stretch")
         if st.button("Write Billing Table to Sheet"):
             write_df(service, spreadsheet_id, BILLING_SHEET, billing.df)
             st.success("Billing table updated.")
