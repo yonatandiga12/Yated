@@ -195,7 +195,13 @@ if page == "Participants":
     )
     df = consent_state.df
     if "Media Consent" in df.columns:
-        df["Media Consent"] = df["Media Consent"].map(lambda v: bool(v))
+        def _to_bool(v: object) -> bool:
+            if isinstance(v, bool):
+                return v
+            s = "" if v is None else str(v).strip().lower()
+            return s in {"true", "1", "✓", "yes", "y"}
+
+        df["Media Consent"] = df["Media Consent"].map(_to_bool).fillna(False).astype(bool)
 
     morning_alert_mask = build_morning_framework_alert_mask(
         df, birthdate_col="Date of Birth", framework_col="Morning Framework"
