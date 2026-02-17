@@ -182,6 +182,7 @@ if page == "Participants":
     st.header("Participant Details")
 
     cols = [
+        "Alert",
         "Serial Number",
         "First Name",
         "Last Name",
@@ -319,14 +320,20 @@ if page == "Participants":
     morning_alert_mask = build_morning_framework_alert_mask(
         df, birthdate_col="Date of Birth", framework_col="Morning Framework"
     )
+    df["Alert"] = ["ALERT" if x else "" for x in morning_alert_mask]
 
     edited_df = st.data_editor(
         df,
         width="stretch",
         hide_index=True,
         num_rows="dynamic",
-        disabled=["Serial Number", "Age", "Required Payment"],
+        disabled=["Alert", "Serial Number", "Age", "Required Payment"],
         column_config={
+            "Alert": st.column_config.TextColumn(
+                label="Alert",
+                help="ALERT means morning framework age rule is active for this row.",
+                width="small",
+            ),
             "Morning Framework": st.column_config.SelectboxColumn(
                 label="Morning Framework",
                 options=MORNING_FRAMEWORK_OPTIONS,
@@ -368,6 +375,8 @@ if page == "Participants":
     if st.button("Save Participant Details", type="primary"):
         try:
             edited_df = edited_df.reindex(columns=cols, fill_value="")
+            if "Alert" in edited_df.columns:
+                edited_df = edited_df.drop(columns=["Alert"])
             if "Date of Birth" in edited_df.columns:
                 edited_df["Date of Birth"] = pd.to_datetime(edited_df["Date of Birth"], errors="coerce").dt.strftime(
                     "%Y-%m-%d"
@@ -521,6 +530,7 @@ if page == "Staff Details":
         staff_df, gender_col="Gender", clearance_col="Police Clearance"
     )
     staff_df = police_state.df
+    staff_df["Alert"] = ["ALERT" if x else "" for x in police_state.needs_attention]
     if "Police Clearance" in staff_df.columns:
         def _to_bool(v: object) -> bool:
             if isinstance(v, bool):
@@ -535,8 +545,13 @@ if page == "Staff Details":
         width="stretch",
         hide_index=True,
         num_rows="dynamic",
-        disabled=["Weekly Hours", "Hourly Total", "Remaining Hours"],
+        disabled=["Alert", "Weekly Hours", "Hourly Total", "Remaining Hours"],
         column_config={
+            "Alert": st.column_config.TextColumn(
+                label="Alert",
+                help="ALERT means police clearance is required for this staff row.",
+                width="small",
+            ),
             "Scholarship": st.column_config.SelectboxColumn(
                 label="Scholarship",
                 options=sorted(SCHOLARSHIP_OPTIONS),
@@ -623,6 +638,8 @@ if page == "Staff Details":
     if st.button("Save Staff Details", type="primary"):
         try:
             edited = edited.reindex(columns=staff_cols, fill_value="")
+            if "Alert" in edited.columns:
+                edited = edited.drop(columns=["Alert"])
             edited = apply_staff_details_rules(
                 edited,
                 scholarship_col="Scholarship",
