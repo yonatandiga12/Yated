@@ -219,6 +219,8 @@ if page == "Participants":
     df = normalize_attendance_for_editor(df, attendance_col="Attendance")
     df = compute_age_column(df, birthdate_col="Date of Birth", age_col="Age")
     df = compute_required_payment(df, days_col="Attendance Days", payment_col="Required Payment")
+    if "Date of Birth" in df.columns:
+        df["Date of Birth"] = pd.to_datetime(df["Date of Birth"], errors="coerce")
 
     current_year = date.today().year
     consent_state = normalize_media_consent_for_editor(
@@ -366,6 +368,11 @@ if page == "Participants":
     if st.button("Save Participant Details", type="primary"):
         try:
             edited_df = edited_df.reindex(columns=cols, fill_value="")
+            if "Date of Birth" in edited_df.columns:
+                edited_df["Date of Birth"] = pd.to_datetime(edited_df["Date of Birth"], errors="coerce").dt.strftime(
+                    "%Y-%m-%d"
+                )
+                edited_df["Date of Birth"] = edited_df["Date of Birth"].fillna("")
             edited_df = normalize_media_consent_for_save(
                 edited_df,
                 consent_col="Media Consent",
