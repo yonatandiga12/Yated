@@ -8,6 +8,8 @@ from yated.constants import (
     SCHOLARSHIP_OPTIONS,
     MONTHS_NOV_JUL,
     MORNING_FRAMEWORK_OPTIONS,
+    ROLE_OPTIONS,
+    TRANSPORTATION_OPTIONS,
 )
 from yated.sheets import (
     DEFAULT_SPREADSHEET_ID,
@@ -30,9 +32,12 @@ from yated.participants import (
 )
 from yated.staff import (
     apply_hourly_totals,
+    apply_staff_details_rules,
     build_staff_backup_df,
     compute_remaining_hours,
     compute_hourly_totals,
+    derive_transportation_from_scholarship,
+    derive_weekly_hours_from_scholarship,
     normalize_police_clearance_for_editor,
     normalize_police_clearance_for_save,
     should_rollover,
@@ -41,7 +46,7 @@ from yated.staff import (
 from yated.attendance import (
     build_participant_daily_attendance,
     build_staff_daily_attendance,
-    summarize_participant_attendance,
+    summarize_participant_attendance_yearly,
     summarize_staff_hours,
 )
 from yated.payments import build_billing_table
@@ -111,6 +116,29 @@ def upsert_date_rows(base_df: pd.DataFrame, date_col: str, day_value: str, new_r
         out = out[out[date_col].astype(str) != day_value]
     out = pd.concat([out, new_rows], ignore_index=True)
     return out
+
+
+def build_and_sync_participant_summary(_service, spreadsheet_id: str) -> pd.DataFrame:
+    participants_df = read_df_cached(_service, spreadsheet_id, PARTICIPANTS_SHEET)
+    attendance_df = read_df_cached(_service, spreadsheet_id, PARTICIPANTS_ATTENDANCE_SHEET)
+    year = date.today().year
+    summary_df = summarize_participant_attendance_yearly(
+        attendance_df=attendance_df,
+        participants_df=participants_df,
+        year=year,
+        participants_serial_col="Serial Number",
+        participants_name_col="First Name",
+        participants_last_name_col="Last Name",
+        participants_attendance_col="Attendance",
+        attendance_serial_col="Serial Number",
+        attended_col="Attended",
+    )
+    existing_summary = read_df_cached(_service, spreadsheet_id, PARTICIPANTS_ATTENDANCE_SUMMARY)
+    left = summary_df.fillna("").astype(str)
+    right = existing_summary.fillna("").astype(str) if not existing_summary.empty else pd.DataFrame()
+    if left.to_dict("records") != right.to_dict("records"):
+        write_df(_service, spreadsheet_id, PARTICIPANTS_ATTENDANCE_SUMMARY, summary_df)
+    return summary_df
 
 
 with st.sidebar:
@@ -210,7 +238,7 @@ if page == "Participants":
                 first_name = st.text_input("First Name")
                 last_name = st.text_input("Last Name")
                 id_number = st.text_input("ID Number")
-                dob = st.date_input("Date of Birth", value=date(2005, 1, 1))
+                dob = st.date_input("Date of Birth", value=None)
                 attendance = st.checkbox("Attendance (checked = attending)", value=True)
             with c2:
                 allergies = st.text_input("Allergies")
@@ -284,16 +312,6 @@ if page == "Participants":
         df, birthdate_col="Date of Birth", framework_col="Morning Framework"
     )
 
-    def _style_morning_framework(val, row_idx):
-        if row_idx < len(morning_alert_mask) and morning_alert_mask[row_idx]:
-            return "background-color: #ffb3b3;"
-        return ""
-
-    def _style_media_consent(val, row_idx):
-        if row_idx < len(consent_state.needs_attention) and consent_state.needs_attention[row_idx]:
-            return "background-color: #ffd6a5;"
-        return ""
-
     edited_df = st.data_editor(
         df,
         width="stretch",
@@ -304,6 +322,11 @@ if page == "Participants":
             "Morning Framework": st.column_config.SelectboxColumn(
                 label="Morning Framework",
                 options=MORNING_FRAMEWORK_OPTIONS,
+                required=False,
+            ),
+            "Date of Birth": st.column_config.DateColumn(
+                label="Date of Birth",
+                format="YYYY-MM-DD",
                 required=False,
             ),
             "Attendance Days": st.column_config.MultiselectColumn(
@@ -321,19 +344,18 @@ if page == "Participants":
             ),
         },
     )
-    st.caption("Highlight preview (red = morning framework alert, orange = media consent needed).")
-    styler = df.style
-    if "Morning Framework" in df.columns:
-        styler = styler.apply(
-            lambda r: [_style_morning_framework(v, r.name) if c == "Morning Framework" else "" for c, v in r.items()],
-            axis=1,
+    flagged_names = []
+    if morning_alert_mask and "First Name" in df.columns and "Last Name" in df.columns:
+        for idx, is_flagged in enumerate(morning_alert_mask):
+            if is_flagged and idx < len(df):
+                full_name = f"{df.at[idx, 'First Name']} {df.at[idx, 'Last Name']}".strip()
+                flagged_names.append(full_name)
+    if flagged_names:
+        st.error(
+            "Morning framework age alert for: "
+            + ", ".join(flagged_names)
+            + ". (Age 20 years and 11 months and above in Shahar/Dekalim/Yesodot/Ilanot.)"
         )
-    if "Media Consent" in df.columns:
-        styler = styler.apply(
-            lambda r: [_style_media_consent(v, r.name) if c == "Media Consent" else "" for c, v in r.items()],
-            axis=1,
-        )
-    st.dataframe(styler, width="stretch")
 
     if st.button("Save Participant Details", type="primary"):
         try:
@@ -427,6 +449,7 @@ if page == "Participant Attendance":
             try:
                 updated = upsert_date_rows(attendance_df, "Date", attendance_date.isoformat(), edited)
                 write_df(service, spreadsheet_id, PARTICIPANTS_ATTENDANCE_SHEET, updated)
+                build_and_sync_participant_summary(service, spreadsheet_id)
                 st.success("Attendance saved.")
             except Exception as e:
                 st.error(f"Save failed: {e}")
@@ -435,20 +458,12 @@ if page == "Participant Attendance":
 if page == "Participant Attendance Summary":
     st.header("Participant Attendance Summary")
 
-    attendance_df = read_df_cached(service, spreadsheet_id, PARTICIPANTS_ATTENDANCE_SHEET)
-    if attendance_df.empty:
-        st.info("No attendance data yet.")
+    summary_df = build_and_sync_participant_summary(service, spreadsheet_id)
+    if summary_df.empty:
+        st.info("No active participants with attendance enabled.")
     else:
-        summary_df = summarize_participant_attendance(
-            attendance_df,
-            serial_col="Serial Number",
-            name_col="Participant Name",
-            attended_col="Attended",
-        )
         st.dataframe(summary_df, width="stretch")
-        if st.button("Write Summary to Sheet"):
-            write_df(service, spreadsheet_id, PARTICIPANTS_ATTENDANCE_SUMMARY, summary_df)
-            st.success("Summary updated.")
+        st.caption("This table updates automatically from submitted Participant Attendance data.")
 
 
 if page == "Staff Details":
@@ -482,6 +497,12 @@ if page == "Staff Details":
     totals_map = compute_hourly_totals(attendance_df, serial_col="Serial Number", hours_col="Hours")
     staff_df = apply_hourly_totals(staff_df, "Serial Number", "Hourly Total", totals_map)
     staff_df = compute_remaining_hours(staff_df, "Annual Hours", "Hourly Total", "Remaining Hours")
+    staff_df = apply_staff_details_rules(
+        staff_df,
+        scholarship_col="Scholarship",
+        transportation_col="Transportation",
+        weekly_hours_col="Weekly Hours",
+    )
 
     police_state = normalize_police_clearance_for_editor(
         staff_df, gender_col="Gender", clearance_col="Police Clearance"
@@ -496,25 +517,31 @@ if page == "Staff Details":
 
         staff_df["Police Clearance"] = staff_df["Police Clearance"].map(_to_bool).fillna(False).astype(bool)
 
-    def _style_police(val, row_idx):
-        if row_idx < len(police_state.needs_attention) and police_state.needs_attention[row_idx]:
-            return "background-color: #ffb3b3;"
-        return ""
-
     edited = st.data_editor(
         staff_df,
         width="stretch",
         hide_index=True,
         num_rows="dynamic",
+        disabled=["Weekly Hours", "Hourly Total", "Remaining Hours"],
         column_config={
             "Scholarship": st.column_config.SelectboxColumn(
                 label="Scholarship",
                 options=sorted(SCHOLARSHIP_OPTIONS),
                 required=False,
             ),
+            "Role": st.column_config.SelectboxColumn(
+                label="Role",
+                options=ROLE_OPTIONS,
+                required=False,
+            ),
             "Current Day": st.column_config.SelectboxColumn(
                 label="Current Day",
                 options=DAYS_OPTIONS,
+                required=False,
+            ),
+            "Transportation": st.column_config.SelectboxColumn(
+                label="Transportation",
+                options=["", "X"] + TRANSPORTATION_OPTIONS,
                 required=False,
             ),
             "Police Clearance": st.column_config.CheckboxColumn(
@@ -533,9 +560,15 @@ if page == "Staff Details":
                 scholarship = st.selectbox("Scholarship", options=[""] + sorted(SCHOLARSHIP_OPTIONS))
                 current_day = st.selectbox("Current Day", options=[""] + DAYS_OPTIONS)
             with c2:
-                role = st.text_input("Role (Instructor/Professional)")
-                transportation = st.text_input("Transportation")
-                weekly_hours = st.text_input("Weekly Hours")
+                role = st.selectbox("Role", options=[""] + ROLE_OPTIONS)
+                auto_transportation = derive_transportation_from_scholarship(scholarship, "")
+                if auto_transportation == "X":
+                    transportation = "X"
+                    st.text_input("Transportation", value="X", disabled=True)
+                else:
+                    transportation = st.selectbox("Transportation", options=[""] + TRANSPORTATION_OPTIONS)
+                weekly_hours = derive_weekly_hours_from_scholarship(scholarship)
+                st.text_input("Weekly Hours (auto)", value=weekly_hours, disabled=True)
                 annual_hours = st.text_input("Annual Hours")
             with c3:
                 police_clearance = st.checkbox("Police Clearance", value=False)
@@ -560,21 +593,29 @@ if page == "Staff Details":
             }
             staff_df = pd.concat([staff_df, pd.DataFrame([new_row])], ignore_index=True)
             try:
+                staff_df = apply_staff_details_rules(
+                    staff_df,
+                    scholarship_col="Scholarship",
+                    transportation_col="Transportation",
+                    weekly_hours_col="Weekly Hours",
+                )
                 to_save = normalize_police_clearance_for_save(staff_df, clearance_col="Police Clearance")
                 write_df(service, spreadsheet_id, STAFF_DETAILS_SHEET, to_save)
                 st.success("Staff member added.")
             except Exception as e:
                 st.error(f"Add failed: {e}")
-    st.caption("Highlight preview (red = police clearance needed).")
-    styler = staff_df.style.apply(
-        lambda r: [_style_police(v, r.name) if c == "Police Clearance" else "" for c, v in r.items()],
-        axis=1,
-    )
-    st.dataframe(styler, width="stretch")
+    if any(police_state.needs_attention):
+        st.error("Police clearance is required for male staff members.")
 
     if st.button("Save Staff Details", type="primary"):
         try:
             edited = edited.reindex(columns=staff_cols, fill_value="")
+            edited = apply_staff_details_rules(
+                edited,
+                scholarship_col="Scholarship",
+                transportation_col="Transportation",
+                weekly_hours_col="Weekly Hours",
+            )
             edited = normalize_police_clearance_for_save(edited, clearance_col="Police Clearance")
             write_df(service, spreadsheet_id, STAFF_DETAILS_SHEET, edited)
             st.success("Saved.")

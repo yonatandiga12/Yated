@@ -10,6 +10,7 @@ from yated.staff import (
     build_staff_backup_df,
     summarize_staff_by_scholarship,
     should_rollover,
+    apply_staff_details_rules,
 )
 
 
@@ -35,6 +36,18 @@ class StaffRulesTests(unittest.TestCase):
     def test_should_rollover(self):
         self.assertTrue(should_rollover(2025, today=date(2026, 9, 1)))
         self.assertFalse(should_rollover(2026, today=date(2026, 8, 31)))
+
+    def test_staff_rules_from_scholarship(self):
+        df = pd.DataFrame({
+            "Scholarship": ["Nakaz", "Volunteer", "Perach", "Other"],
+            "Transportation": ["Ofakim", "", "Beer Sheva", "Hazor"],
+            "Weekly Hours": ["", "", "", ""],
+        })
+        out = apply_staff_details_rules(df, "Scholarship", "Transportation", "Weekly Hours")
+        self.assertEqual(out.loc[0, "Transportation"], "X")
+        self.assertEqual(out.loc[1, "Transportation"], "X")
+        self.assertEqual(out.loc[2, "Weekly Hours"], "4")
+        self.assertEqual(out.loc[0, "Weekly Hours"], "2")
 
 
 if __name__ == "__main__":

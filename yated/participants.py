@@ -80,7 +80,7 @@ def needs_morning_framework_alert(born: date | None, today: date | None = None) 
     today = today or date.today()
     twenty_first = date(born.year + 21, born.month, born.day)
     one_month_before = _shift_month(twenty_first, -1)
-    return one_month_before <= today < twenty_first
+    return today >= one_month_before
 
 
 def normalize_days_for_editor(df: pd.DataFrame, days_col: str) -> pd.DataFrame:

@@ -5,6 +5,8 @@ from datetime import date
 
 import pandas as pd
 
+from .constants import TRANSPORTATION_OPTIONS
+
 
 @dataclass
 class PoliceClearanceState:
@@ -139,3 +141,47 @@ def should_rollover(last_year: int | None, today: date | None = None) -> bool:
     if last_year is None:
         return True
     return today.year > last_year
+
+
+def _normalize_scholarship(value: object) -> str:
+    return "" if value is None else str(value).strip().lower()
+
+
+def derive_weekly_hours_from_scholarship(scholarship: object) -> str:
+    normalized = _normalize_scholarship(scholarship)
+    if normalized in {"keren moshe", "perach", "telem"}:
+        return "4"
+    if normalized in {"nakaz", "volunteer"}:
+        return "2"
+    return ""
+
+
+def derive_transportation_from_scholarship(scholarship: object, current_transportation: object) -> str:
+    normalized = _normalize_scholarship(scholarship)
+    if normalized in {"nakaz", "volunteer"}:
+        return "X"
+    current = "" if current_transportation is None else str(current_transportation).strip()
+    allowed = set(TRANSPORTATION_OPTIONS)
+    return current if current in allowed else ""
+
+
+def apply_staff_details_rules(
+    df: pd.DataFrame,
+    scholarship_col: str,
+    transportation_col: str,
+    weekly_hours_col: str,
+) -> pd.DataFrame:
+    out = df.copy()
+    if scholarship_col not in out.columns:
+        return out
+
+    if transportation_col in out.columns:
+        out[transportation_col] = [
+            derive_transportation_from_scholarship(s, t)
+            for s, t in zip(out[scholarship_col].tolist(), out[transportation_col].tolist())
+        ]
+
+    if weekly_hours_col in out.columns:
+        out[weekly_hours_col] = [derive_weekly_hours_from_scholarship(s) for s in out[scholarship_col].tolist()]
+
+    return out

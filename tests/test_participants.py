@@ -25,14 +25,14 @@ class ParticipantRulesTests(unittest.TestCase):
         self.assertEqual(out.loc[1, "Age"], "")
 
     def test_days_normalization_roundtrip(self):
-        df = pd.DataFrame({"Attendance Days": ["Sunday, Tuesday", "Wednesday"]})
+        df = pd.DataFrame({"Attendance Days": ["Monday, Tuesday", "Wednesday"]})
         editor = normalize_days_for_editor(df, "Attendance Days")
-        self.assertEqual(editor.loc[0, "Attendance Days"], ["Sunday", "Tuesday"])
+        self.assertEqual(editor.loc[0, "Attendance Days"], ["Monday", "Tuesday"])
         saved = normalize_days_for_save(editor, "Attendance Days")
-        self.assertEqual(saved.loc[0, "Attendance Days"], "Sunday, Tuesday")
+        self.assertEqual(saved.loc[0, "Attendance Days"], "Monday, Tuesday")
 
     def test_required_payment(self):
-        df = pd.DataFrame({"Attendance Days": ["Sunday, Tuesday", ""]})
+        df = pd.DataFrame({"Attendance Days": ["Monday, Tuesday", ""]})
         out = compute_required_payment(df, "Attendance Days", "Required Payment")
         self.assertEqual(out.loc[0, "Required Payment"], "160")
         self.assertEqual(out.loc[1, "Required Payment"], "0")
@@ -57,7 +57,7 @@ class ParticipantRulesTests(unittest.TestCase):
         today = date(2026, 2, 8)
         df = pd.DataFrame({
             "Date of Birth": ["2005-03-08", "2004-01-01"],
-            "Morning Framework": ["Shahar", "Ilanot"],
+            "Morning Framework": ["Shahar", "Maash"],
         })
         mask = build_morning_framework_alert_mask(df, "Date of Birth", "Morning Framework", today=today)
         self.assertEqual(mask, [True, False])
