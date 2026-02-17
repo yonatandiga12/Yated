@@ -320,7 +320,7 @@ if page == "Participants":
     morning_alert_mask = build_morning_framework_alert_mask(
         df, birthdate_col="Date of Birth", framework_col="Morning Framework"
     )
-    df["Alert"] = ["ALERT" if x else "" for x in morning_alert_mask]
+    df["Alert"] = ["🔴 ALERT" if x else "" for x in morning_alert_mask]
 
     edited_df = st.data_editor(
         df,

@@ -62,6 +62,24 @@ class ParticipantRulesTests(unittest.TestCase):
         mask = build_morning_framework_alert_mask(df, "Date of Birth", "Morning Framework", today=today)
         self.assertEqual(mask, [True, False])
 
+    def test_morning_framework_alert_mask_case_insensitive_and_trimmed(self):
+        today = date(2026, 2, 8)
+        df = pd.DataFrame({
+            "Date of Birth": ["2005-03-08", "2005-03-08", "2005-03-08"],
+            "Morning Framework": ["shahar", "  DEKALIM  ", "Yesodot"],
+        })
+        mask = build_morning_framework_alert_mask(df, "Date of Birth", "Morning Framework", today=today)
+        self.assertEqual(mask, [True, True, True])
+
+    def test_morning_framework_alert_mask_hebrew_aliases(self):
+        today = date(2026, 2, 8)
+        df = pd.DataFrame({
+            "Date of Birth": ["2005-03-08", "2005-03-08", "2005-03-08", "2005-03-08"],
+            "Morning Framework": ["שחר", "דקלים", "יסודות", "אילנות"],
+        })
+        mask = build_morning_framework_alert_mask(df, "Date of Birth", "Morning Framework", today=today)
+        self.assertEqual(mask, [True, True, True, True])
+
 
 if __name__ == "__main__":
     unittest.main()

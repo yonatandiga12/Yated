@@ -316,10 +316,25 @@ def build_morning_framework_alert_mask(
     today = today or date.today()
     if birthdate_col not in df.columns or framework_col not in df.columns:
         return [False] * len(df)
+    alert_framework_aliases = {
+        "shahar",
+        "dekalim",
+        "yesodot",
+        "ilanot",
+        "שחר",
+        "דקלים",
+        "יסודות",
+        "אילנות",
+    }
+    alert_framework_aliases.update({str(v).strip().casefold() for v in MORNING_FRAMEWORK_ALERT})
+
+    def _normalize_framework(v: object) -> str:
+        return "" if v is None else str(v).strip().casefold()
+
     mask = []
     for b, f in zip(df[birthdate_col].tolist(), df[framework_col].tolist()):
         born = _parse_birthdate_to_date(b)
-        fw = "" if f is None else str(f).strip()
-        alert = fw in MORNING_FRAMEWORK_ALERT and needs_morning_framework_alert(born, today)
+        fw = _normalize_framework(f)
+        alert = fw in alert_framework_aliases and needs_morning_framework_alert(born, today)
         mask.append(alert)
     return mask
