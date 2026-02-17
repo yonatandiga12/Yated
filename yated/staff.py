@@ -5,7 +5,13 @@ from datetime import date
 
 import pandas as pd
 
-from .constants import TRANSPORTATION_OPTIONS
+from . import constants as yated_constants
+
+TRANSPORTATION_OPTIONS = getattr(
+    yated_constants,
+    "TRANSPORTATION_OPTIONS",
+    ["Ofakim", "Beer Sheva", "Haloch", "Hazor"],
+)
 
 
 @dataclass

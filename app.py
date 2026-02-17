@@ -8,9 +8,8 @@ from yated.constants import (
     SCHOLARSHIP_OPTIONS,
     MONTHS_NOV_JUL,
     MORNING_FRAMEWORK_OPTIONS,
-    ROLE_OPTIONS,
-    TRANSPORTATION_OPTIONS,
 )
+from yated import constants as yated_constants
 from yated.sheets import (
     DEFAULT_SPREADSHEET_ID,
     build_sheets_service,
@@ -50,6 +49,13 @@ from yated.attendance import (
     summarize_staff_hours,
 )
 from yated.payments import build_billing_table
+
+ROLE_OPTIONS = getattr(yated_constants, "ROLE_OPTIONS", ["Madrich", "Madrich Miktzoi"])
+TRANSPORTATION_OPTIONS = getattr(
+    yated_constants,
+    "TRANSPORTATION_OPTIONS",
+    ["Ofakim", "Beer Sheva", "Haloch", "Hazor"],
+)
 
 
 st.set_page_config(page_title="Yated CRM", layout="wide")
